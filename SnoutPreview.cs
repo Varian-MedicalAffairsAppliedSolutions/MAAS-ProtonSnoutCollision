@@ -16,23 +16,198 @@ using System.Collections;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows.Navigation;
-using MAAS.Common.EulaVerification;
-using System.Configuration;
 using System.IO;
 using System.Globalization;
 using System.Windows.Media.Imaging;
 
 [assembly: AssemblyVersion("1.0.0.1")]
-[assembly: AssemblyExpirationDate("2026-12-31")]
+[assembly: AssemblyExpirationDate("2025-12-31")]
 
 // Expiration date attribute
 public class AssemblyExpirationDate : Attribute
 {
-    public string ExpirationDate { get; }
+    private readonly string expirationDate;
+    
+    public string ExpirationDate 
+    { 
+        get { return expirationDate; } 
+    }
     
     public AssemblyExpirationDate(string expirationDate)
     {
-        ExpirationDate = expirationDate;
+        this.expirationDate = expirationDate;
+    }
+}
+
+// Simple License Verification
+public static class SimpleLicenseVerifier
+{
+    private const string HARDCODED_ACCESS_CODE = "2b5d666c";
+    private const string APP_SETTINGS_SUBDIR = "MAAS-ProtonSnoutCollision-Settings";
+
+    private static string GetAppSettingsDir()
+    {
+        string appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string appSpecificDir = Path.Combine(appDataDir, APP_SETTINGS_SUBDIR);
+        try
+        {
+            Directory.CreateDirectory(appSpecificDir); // Ensure it exists
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(string.Format("Failed to create directory {0} in AppData: {1}", APP_SETTINGS_SUBDIR, ex.Message));
+        }
+        return appSpecificDir;
+    }
+
+    private static string GetLicenseFilePath(string projectName)
+    {
+        return Path.Combine(GetAppSettingsDir(), projectName + "_license.txt");
+    }
+
+    public static string GetNoExpireFilePath()
+    {
+        return Path.Combine(GetAppSettingsDir(), "NOEXPIRE");
+    }
+
+    public static string GetNoAgreeFilePath()
+    {
+        return Path.Combine(GetAppSettingsDir(), "NoAgree.txt");
+    }
+
+    public static string GetValidatedFilePath(string projectName)
+    {
+        return Path.Combine(GetAppSettingsDir(), projectName + "_validated.txt");
+    }
+    
+    public static bool IsLicenseAccepted(string projectName, string version)
+    {
+        string licenseFile = GetLicenseFilePath(projectName);
+        if (!File.Exists(licenseFile))
+            return false;
+            
+        try
+        {
+            string storedCode = File.ReadAllText(licenseFile).Trim();
+            return VerifyAccessCode(storedCode);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    
+    public static bool ShowLicenseDialog(string projectName, string version, string licenseUrl)
+    {
+        // Create simple WPF window for license acceptance
+        Window licenseWindow = new Window();
+        licenseWindow.Title = "License Required"; 
+        licenseWindow.Width = 450; // Slightly wider for longer instruction text
+        licenseWindow.Height = 280; // Slightly taller
+        licenseWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        licenseWindow.ResizeMode = ResizeMode.NoResize;
+        licenseWindow.Background = Brushes.White;
+
+        // Create layout
+        StackPanel mainPanel = new StackPanel();
+        mainPanel.Margin = new Thickness(20);
+
+        // Title
+        TextBlock title = new TextBlock();
+        title.Text = "License Acceptance Required";
+        title.FontSize = 16;
+        title.FontWeight = FontWeights.Bold;
+        title.Margin = new Thickness(0, 0, 0, 15);
+        mainPanel.Children.Add(title);
+
+        // Instructions
+        TextBlock instructions = new TextBlock();
+        instructions.Text = "Please visit the following URL to obtain your access code:\n" + licenseUrl + "\n\nEnter the access code below to continue.";
+        instructions.TextWrapping = TextWrapping.Wrap;
+        instructions.Margin = new Thickness(0, 0, 0, 20);
+        mainPanel.Children.Add(instructions);
+        
+        // Access code input
+        TextBlock codeLabel = new TextBlock();
+        codeLabel.Text = "Access Code:";
+        codeLabel.FontWeight = FontWeights.Bold;
+        codeLabel.Margin = new Thickness(0, 0, 0, 5);
+        mainPanel.Children.Add(codeLabel);
+
+        TextBox codeTextBox = new TextBox();
+        codeTextBox.Width = 200;
+        codeTextBox.Height = 25;
+        codeTextBox.HorizontalAlignment = HorizontalAlignment.Left;
+        codeTextBox.Margin = new Thickness(0, 0, 0, 20);
+        mainPanel.Children.Add(codeTextBox);
+
+        // Buttons
+        StackPanel buttonPanel = new StackPanel();
+        buttonPanel.Orientation = Orientation.Horizontal;
+        buttonPanel.HorizontalAlignment = HorizontalAlignment.Right;
+
+        Button okButton = new Button();
+        okButton.Content = "OK";
+        okButton.Width = 80;
+        okButton.Height = 25;
+        okButton.Margin = new Thickness(0, 0, 10, 0);
+        okButton.IsDefault = true;
+
+        Button cancelButton = new Button();
+        cancelButton.Content = "Cancel";
+        cancelButton.Width = 80;
+        cancelButton.Height = 25;
+        cancelButton.IsCancel = true;
+
+        buttonPanel.Children.Add(okButton);
+        buttonPanel.Children.Add(cancelButton);
+        mainPanel.Children.Add(buttonPanel);
+
+        licenseWindow.Content = mainPanel;
+
+        bool result = false;
+
+        okButton.Click += (sender, e) =>
+        {
+            string enteredCode = codeTextBox.Text.Trim();
+            if (VerifyAccessCode(enteredCode))
+            {
+                try
+                {
+                    string licenseFile = GetLicenseFilePath(projectName);
+                    File.WriteAllText(licenseFile, enteredCode);
+                    result = true;
+                    licenseWindow.Close();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Could not save license acceptance: " + ex.Message, 
+                                  "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else
+            {
+                MessageBox.Show("Invalid access code. Please try again.", 
+                              "Invalid Code", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        };
+
+        cancelButton.Click += (sender, e) =>
+        {
+            result = false;
+            licenseWindow.Close();
+        };
+
+        // Set focus to text box
+        licenseWindow.Loaded += (sender, e) => codeTextBox.Focus();
+
+        licenseWindow.ShowDialog();
+        return result;
+    }
+    
+    private static bool VerifyAccessCode(string inputCode)
+    {
+        return string.Equals(inputCode, HARDCODED_ACCESS_CODE, StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -46,9 +221,8 @@ namespace VMS.TPS
     //Snout
     public class Snout
     {
-
-        const double snout_pos_min = 0;
-        const double snout_pos_max = 421;
+        public const double snout_pos_min = 0;
+        public const double snout_pos_max = 421;
         //snout cover sizes for 3D model
         const double snout_face_zmin = -350;
         const double snout_face_zmax = 350;
@@ -323,7 +497,7 @@ namespace VMS.TPS
         const double snout_pos_max = 421;
 
         private Canvas canvas;
-        private ComboBox field;
+        public ComboBox field;
         private PerspectiveCamera camera;
         private Model3DGroup model3D;
         private System.Windows.Controls.Label snout_position;
@@ -341,6 +515,29 @@ namespace VMS.TPS
         {
             Grid main_grid = new Grid();
 
+            // Add two rows: one for the banner, one for the rest
+            main_grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Top banner
+            main_grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Rest of UI
+
+            // TOP WARNING BANNER
+            var topBanner = new Label();
+            topBanner.Content = "* * * NOT VALIDATED FOR CLINICAL USE * * *";
+            topBanner.Background = new SolidColorBrush(Colors.PaleVioletRed);
+            topBanner.Foreground = new SolidColorBrush(Colors.Black);
+            topBanner.HorizontalContentAlignment = HorizontalAlignment.Center;
+            topBanner.FontWeight = FontWeights.Bold;
+            topBanner.Padding = new Thickness(0, 2, 0, 2);
+            topBanner.FontSize = 14;
+            topBanner.VerticalAlignment = VerticalAlignment.Top;
+            topBanner.HorizontalAlignment = HorizontalAlignment.Stretch;
+            Grid.SetRow(topBanner, 0);
+            main_grid.Children.Add(topBanner);
+
+            // Create a container for the rest of the UI
+            Grid contentGrid = new Grid();
+            Grid.SetRow(contentGrid, 1);
+            main_grid.Children.Add(contentGrid);
+
             //Top left section:
             Border top_left = new Border();
             top_left.Width = 300;
@@ -351,7 +548,7 @@ namespace VMS.TPS
             top_left.CornerRadius = new CornerRadius(3);
             top_left.BorderBrush = Brushes.Brown;
             top_left.Margin = new Thickness(5, 5, 0, 0);
-            main_grid.Children.Add(top_left);
+            contentGrid.Children.Add(top_left);
 
             Grid top_left_grid = new Grid();
 
@@ -399,7 +596,7 @@ namespace VMS.TPS
             top_right.CornerRadius = new CornerRadius(3);
             top_right.BorderBrush = Brushes.Brown;
             top_right.Margin = new Thickness(310, 5, 0, 0);
-            main_grid.Children.Add(top_right);
+            contentGrid.Children.Add(top_right);
 
             Grid top_right_grid = new Grid();
 
@@ -461,12 +658,12 @@ namespace VMS.TPS
             System.Windows.Controls.Label lbl_view_angle = new System.Windows.Controls.Label();
             lbl_view_angle.Content = "View angle[deg]: ";
             lbl_view_angle.Margin = new Thickness(5, 80, 0, 0);
-            main_grid.Children.Add(lbl_view_angle);
+            contentGrid.Children.Add(lbl_view_angle);
 
             view_angle = new System.Windows.Controls.Label();
             view_angle.Margin = new Thickness(95, 80, 0, 0);
             view_angle.Content = 0;
-            main_grid.Children.Add(view_angle);
+            contentGrid.Children.Add(view_angle);
 
             Slider sl_view_angle = new Slider();
             sl_view_angle.Width = 450;
@@ -476,17 +673,17 @@ namespace VMS.TPS
             sl_view_angle.Maximum = 180;
             sl_view_angle.Value = 0;
             sl_view_angle.ValueChanged += sl_view_angle_ValueChanged;
-            main_grid.Children.Add(sl_view_angle);
+            contentGrid.Children.Add(sl_view_angle);
 
             System.Windows.Controls.Label lbl_snout_position = new System.Windows.Controls.Label();
             lbl_snout_position.Content = "Snout position[cm]: ";
             lbl_snout_position.Margin = new Thickness(5, 100, 0, 0);
-            main_grid.Children.Add(lbl_snout_position);
+            contentGrid.Children.Add(lbl_snout_position);
 
             snout_position = new System.Windows.Controls.Label();
             snout_position.Name = "snout_position_value";
             snout_position.Margin = new Thickness(110, 100, 0, 0);
-            main_grid.Children.Add(snout_position);
+            contentGrid.Children.Add(snout_position);
 
             sl_snout_position = new Slider();
             sl_snout_position.Name = "snout_position";
@@ -497,13 +694,13 @@ namespace VMS.TPS
             sl_snout_position.Maximum = snout_pos_max;
             sl_snout_position.Value = 0;
             sl_snout_position.ValueChanged += sl_snout_position_ValueChanged;
-            main_grid.Children.Add(sl_snout_position);
+            contentGrid.Children.Add(sl_snout_position);
 
             canvas = new Canvas();
             canvas.Margin = new Thickness(0, 130, 0, 0);
             canvas.Background = Brushes.LightSkyBlue;
             canvas.MouseWheel += Canvas_MouseWheel;
-            main_grid.Children.Add(canvas);
+            contentGrid.Children.Add(canvas);
 
 
 
@@ -539,22 +736,11 @@ namespace VMS.TPS
 
 
 
-            main_grid.Children.Add(myTextBlock);
+            contentGrid.Children.Add(myTextBlock);
             myTextBlock.VerticalAlignment = VerticalAlignment.Bottom;
             myTextBlock.HorizontalAlignment = HorizontalAlignment.Stretch;
 
             AddBottomBanner(myTextBlock);
-
-            //Grid.SetRow(myTextBlock, 9);
-            //Grid.SetRowSpan(myTextBlock, 2);
-            /*
-             <TextBlock Grid.Row="1" Name="Footer" Background="PaleVioletRed">    
-                <Label Margin="0"><Hyperlink NavigateUri="http://medicalaffairs.varian.com/download/VarianLUSLA.pdf" RequestNavigate="Hyperlink_RequestNavigate">
-                    Bound by the terms of the Varian LUSLA
-                </Hyperlink></Label>
-                <Label Margin="0" Content="{Binding PostText}"/>
-            </TextBlock>
-             */
 
             this.Content = main_grid;
         }
@@ -659,13 +845,31 @@ namespace VMS.TPS
 
         private void Field_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (field.SelectedIndex < 0) return; // Guard clause
+
             if (model3D != null)
             {
-                Initiate3DView();
+                Initiate3DView(); // This will re-initialize based on the new selection
             }
-            //update controls
+            
             air_gap.Content = "Calculated air gap = ";
-            sl_snout_position.Value = (context.IonPlanSetup.Beams.ElementAt(field.SelectedIndex) as IonBeam).SnoutPosition * 10; //converting to mm
+
+            if (context.IonPlanSetup != null && context.IonPlanSetup.Beams.Any() && field.SelectedIndex < context.IonPlanSetup.Beams.Count())
+            {
+                IonBeam selectedBeam = context.IonPlanSetup.Beams.ElementAt(field.SelectedIndex) as IonBeam;
+                if (selectedBeam != null)
+                {
+                    sl_snout_position.Value = selectedBeam.SnoutPosition * 10; //converting to mm
+                }
+                else
+                {
+                    sl_snout_position.Value = 0; // Or some default/error state
+                }
+            }
+            else
+            {
+                 sl_snout_position.Value = 0; // Or some default/error state
+            }
         }
 
         private void txt_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -731,28 +935,71 @@ namespace VMS.TPS
 
         public void Initiate3DView()
         {
-            //collecting required patient information
+            if (context == null || context.IonPlanSetup == null || !context.IonPlanSetup.Beams.Any())
+            {
+                MessageBox.Show("No beams found in the current ion plan. Cannot initiate 3D view.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                if(canvas.Children.Count > 1 && canvas.Children[1] is Viewport3D) canvas.Children.RemoveAt(1); 
+                model3D = null; 
+                return;
+            }
+
+            if (field.SelectedIndex < 0 || field.SelectedIndex >= context.IonPlanSetup.Beams.Count())
+            {
+                if(context.IonPlanSetup.Beams.Any()) field.SelectedIndex = 0; 
+                else 
+                {
+                     MessageBox.Show("No beams available to select.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                     return;
+                }
+            }
+
             IonPlanSetup active_proton_plan = context.IonPlanSetup;
-            IEnumerable<Beam> fields = active_proton_plan.Beams;
+            IonBeam selectedBeam = active_proton_plan.Beams.ElementAt(field.SelectedIndex) as IonBeam;
+
+            if (selectedBeam == null)
+            {
+                MessageBox.Show("Selected field is not a valid IonBeam.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            
+            if (selectedBeam.ControlPoints == null || !selectedBeam.ControlPoints.Any())
+            {
+                MessageBox.Show("Selected beam has no control points.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
 
             StructureSet sset = active_proton_plan.StructureSet;
-            Structure body = sset.Structures.Where(s => s.DicomType == "EXTERNAL").First();
-
+            Structure body = null;
+            if (sset != null)
+            {
+                body = sset.Structures.FirstOrDefault(s => s.DicomType == "EXTERNAL");
+            }
+            
+            if (body == null)
+            {
+                MessageBox.Show("EXTERNAL body structure not found.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            
             //creating visual model
             ModelVisual3D modelvisual = new ModelVisual3D();
             model3D = new Model3DGroup();
-
             modelvisual.Content = model3D;
 
             Viewport3D viewport = new Viewport3D();
             Canvas.SetLeft(viewport, 0);
             Canvas.SetTop(viewport, 0);
-            if (canvas.Children.Count == 2)
+            if (canvas.Children.Count > 1 && canvas.Children[1] is Viewport3D) // Check if second child is Viewport3D
             {
-                //When creating 3D view canvas has only 1 child. After that it will have 2, second one  being the 3D view
                 canvas.Children.RemoveAt(1);
             }
+            else if (canvas.Children.Count == 1 && !(canvas.Children[0] is Button)) // If only one child and it's not the help button
+            {
+                 // This case might indicate an unexpected state, potentially clear all but button
+            }
+
             canvas.Children.Add(viewport);
+            // ... bindings ...
             Binding binding_w = new Binding();
             binding_w.Path = new PropertyPath(Canvas.ActualWidthProperty);
             binding_w.Source = canvas;
@@ -761,14 +1008,11 @@ namespace VMS.TPS
             binding_h.Path = new PropertyPath(Canvas.ActualHeightProperty);
             binding_h.Source = canvas;
             viewport.SetBinding(Viewport3D.HeightProperty, binding_h);
-
-            //assigning model visual to view port 3D of the canvas on the main window
             viewport.Children.Add(modelvisual);
 
-            VVector v_isocenter = fields.ElementAt(field.SelectedIndex).IsocenterPosition;
+            VVector v_isocenter = selectedBeam.IsocenterPosition;
             Vector3D isocenter = new Vector3D(v_isocenter.x, v_isocenter.y, v_isocenter.z);
 
-            //adding patient body 3D in the model
             GeometryModel3D patientmodel = new GeometryModel3D();
             patientmodel.Geometry = body.MeshGeometry;
             DiffuseMaterial dm = new DiffuseMaterial();
@@ -776,47 +1020,37 @@ namespace VMS.TPS
             patientmodel.Material = dm;
             model3D.Children.Add(patientmodel);
 
-            //creating snout mesh at well know geometry when gantry at 0  --------------------------------------------
-
-            //read required information from the plan, for a field selected in drop down
-            double gantry_angle = fields.ElementAt(field.SelectedIndex).ControlPoints[0].GantryAngle;
-            double plan_snout_distance = (fields.ElementAt(field.SelectedIndex) as IonBeam).SnoutPosition * 10; //converting to mm
-            double couch_rtn = fields.ElementAt(field.SelectedIndex).ControlPoints[0].PatientSupportAngle;
-
-            //apply couch rotation:
-
-            //To apply couch rotation, we can rotate the BODY or the Snout geometry
-            //For visualization, rotating BODY is probably most straightforward. It can be done by applying Transform3D to BODY Model3D
-            //However, Transform3D does not rotate points of the Mesh3D, it only changes coordinate system for the Model3D
-            //The BODY is also used for air gap calculation and for this calculation the Mesh 3D of the Snout and BODY geometries must be in the 
-            //same coordinate system i.e. we would need to rotate all points of BODY Mesh3D. This is doable but a new Mesh3D must be created and there is no
-            //way to make this Mesh3D part of Structure which is needed to call GetSegmentProfile for air gap calculation.
-            //
-            //Therefore, to apply couch rotation, the Snout geometry will be rotated, not BODY. The 3D view coordinate system is then connected with the couch.
+            double gantry_angle = selectedBeam.ControlPoints[0].GantryAngle;
+            double plan_snout_distance = selectedBeam.SnoutPosition * 10; 
+            double couch_rtn = selectedBeam.ControlPoints[0].PatientSupportAngle;
 
             snout = new Snout(plan_snout_distance, gantry_angle, couch_rtn, isocenter);
             model3D.Children.Add(snout.Geometry);
 
-            //CAX display
-            Vector3D snout_parked = Vector3D.Multiply(Vector3D.Divide(Vector3D.Subtract(snout.Planned_Snout_Position, isocenter), snout.Snout_Distance), snout_pos_max);
+            double snoutDistanceForAxis = snout.Snout_Distance != 0 ? snout.Snout_Distance : Snout.snout_pos_max; 
+            Vector3D snout_parked = Vector3D.Multiply(Vector3D.Divide(Vector3D.Subtract(snout.Planned_Snout_Position, isocenter), snoutDistanceForAxis), Snout.snout_pos_max);
             Line3D CAX = new Line3D(Point3D.Add(new Point3D(0, 0, 0), Vector3D.Add(snout_parked, isocenter)), new Point3D(isocenter.X, isocenter.Y, isocenter.Z), Brushes.YellowGreen, 1);
             model3D.Children.Add(CAX.GeometryModel3D);
 
-            //adding lights 
             DirectionalLight light1 = new DirectionalLight(Colors.WhiteSmoke, new Vector3D(0, 600, 0));
             model3D.Children.Add(light1);
             DirectionalLight light2 = new DirectionalLight(Colors.WhiteSmoke, new Vector3D(0, -600, 0));
             model3D.Children.Add(light2);
 
-            //adding camera (facing the patient at 100cm distance
             camera = new PerspectiveCamera();
             camera.Position = new Point3D(0, -1500, 0);
             camera.LookDirection = new Vector3D(0, 1500, 0);
             camera.UpDirection = new Vector3D(0, 0, 1);
-
             viewport.Camera = camera;
-        }
 
+            // Update UI elements that depend on the loaded field
+            Label patientLabel = LogicalTreeHelper.FindLogicalNode(this, "patient") as Label;
+            if (patientLabel != null) patientLabel.Content = context.Patient.FirstName + " " + context.Patient.LastName + " (ID:" + context.Patient.Id + ")";
+            Label planLabel = LogicalTreeHelper.FindLogicalNode(this, "plan") as Label;
+            if (planLabel != null) planLabel.Content = context.IonPlanSetup.Id;
+            if (snout_position != null) snout_position.Content = (plan_snout_distance / 10).ToString("##.0");
+            if (sl_snout_position != null) sl_snout_position.Value = plan_snout_distance; 
+        }
     }
 
     //Class representing 3D line
@@ -889,7 +1123,50 @@ namespace VMS.TPS
             line_mesh.TriangleIndices = new Int32Collection() { 0, 1, 2, 2, 1, 3, 5, 7, 4, 7, 6, 4, 1, 4, 6, 6, 3, 1, 5, 2, 7, 0, 2, 5, 7, 2, 3, 7, 3, 6, 4, 0, 5, 4, 1, 0 };
             geoModel3D.Geometry = line_mesh;
         }
+    }
 
+    // SnoutPreview wrapper class for the updated Script interface
+    public class SnoutPreview : UserControl
+    {
+        private WNDContent content;
+        
+        public SnoutPreview(ScriptContext context, System.Windows.Window window, ScriptEnvironment environment, bool isValidated)
+        {
+            // Validate required context
+            if (context.Patient == null)
+            {
+                throw new InvalidOperationException("No patient currently loaded.");
+            }
+            
+            if (context.IonPlanSetup == null)
+            {
+                throw new InvalidOperationException("There are no proton plans opened. Please open a proton plan.");
+            }
+            
+            // Create and configure the main content
+            content = new WNDContent();
+            content.context = context;
+            
+            // Set this control's content
+            this.Content = content;
+
+            // Populate fields ComboBox in WNDContent and set initial selection
+            if (context.IonPlanSetup.IonBeams.Any())
+            {
+                foreach (IonBeam beam in context.IonPlanSetup.IonBeams)
+                {
+                    content.field.Items.Add(beam.Id); // Access 'field' through 'content'
+                }
+                content.field.SelectedIndex = 0; // Set selected index here
+            }
+            else
+            {
+                // Handle case with no beams, perhaps disable UI or show message in WNDContent
+            }
+            
+            // Initialize the 3D view AFTER ComboBox is populated and index is set
+            content.Initiate3DView();
+        }
     }
 
     public class Script
@@ -911,216 +1188,139 @@ namespace VMS.TPS
         {
             try
             {
-                // Get the assembly path
-                var path = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                // Path variable no longer needed here as SimpleLicenseVerifier handles its paths
                 
-                // Check for NOEXPIRE file
-                var noexp_path = Path.Combine(path, "NOEXPIRE");
-                bool bNoExpire = File.Exists(noexp_path);
+                // Check for NOEXPIRE file using AppData path
+                bool bNoExpire = File.Exists(SimpleLicenseVerifier.GetNoExpireFilePath());
                 
-                // Check for NoAgree.txt file
-                bool skipAgree = File.Exists(Path.Combine(path, "NoAgree.txt"));
+                // Check for NoAgree.txt file using AppData path
+                bool skipAgree = File.Exists(SimpleLicenseVerifier.GetNoAgreeFilePath());
 
-                // Initialize EULA verification
-                var eulaVerifier = new EulaVerifier(PROJECT_NAME, PROJECT_VERSION, LICENSE_URL);
-                
-                // Get access to the EulaConfig
-                var eulaConfig = EulaConfig.Load(PROJECT_NAME);
-                if (eulaConfig.Settings == null)
+                // Simple license verification - RE-ENABLED (Simplified)
+                if (!skipAgree && !SimpleLicenseVerifier.IsLicenseAccepted(PROJECT_NAME, PROJECT_VERSION))
                 {
-                    eulaConfig.Settings = new ApplicationSettings();
-                }
-
-                // Show EULA dialog if not accepted yet and not skipping agreement
-                if (!eulaVerifier.IsEulaAccepted() && !skipAgree)
-                {
-                    MessageBox.Show(
-                        $"This version of {PROJECT_NAME} (v{PROJECT_VERSION}) requires license acceptance before first use.\n\n" +
-                        "You will be prompted to provide an access code. Please follow the instructions to obtain your code.",
-                        "License Acceptance Required",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
-
-                    // Load QR code image
-                    BitmapImage qrCode = null;
-                    try
+                    if (!SimpleLicenseVerifier.ShowLicenseDialog(PROJECT_NAME, PROJECT_VERSION, LICENSE_URL))
                     {
-                        string qrCodePath = Path.Combine(path, "Resources", "qrcode.bmp");
-                        if (File.Exists(qrCodePath))
-                        {
-                            qrCode = new BitmapImage(new Uri(qrCodePath, UriKind.Absolute));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error loading QR code: {ex.Message}");
-                    }
-
-                    // Show dialog and check result
-                    if (!eulaVerifier.ShowEulaDialog(qrCode))
-                    {
-                        MessageBox.Show(
-                            "License acceptance is required to use this application.\n\n" +
-                            "The application will now close.",
-                            "License Not Accepted",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Warning);
-                        window.Close();
+                        MessageBox.Show("License acceptance is required to use this application.", 
+                                      "License Required", MessageBoxButton.OK, MessageBoxImage.Warning);
                         return;
                     }
                 }
 
-                // Check expiration
+                // Check expiration - RE-ENABLED
                 var asmCa = typeof(Script).Assembly.CustomAttributes
                     .FirstOrDefault(ca => ca.AttributeType == typeof(AssemblyExpirationDate));
                 
+                DateTime endDate;
                 if (asmCa != null &&
                     DateTime.TryParse(asmCa.ConstructorArguments.FirstOrDefault().Value as string,
-                        new CultureInfo("en-US"), DateTimeStyles.None, out DateTime endDate))
+                        new CultureInfo("en-US"), DateTimeStyles.None, out endDate))
                 {
                     if (DateTime.Now > endDate && !bNoExpire)
                     {
-                        MessageBox.Show($"Application has expired. Newer builds with future expiration dates can be found here: {GITHUB_URL}");
-                        window.Close();
+                        MessageBox.Show("Application has expired. Newer builds with future expiration dates can be found here: " + GITHUB_URL);
                         return;
                     }
-
-                    // Display opening msg
-                    string msg = $"The current DoseDynamicArcs application is provided AS IS as a non-clinical, research only tool in evaluation only. The current " +
-                    $"application will only be available until {endDate.Date} after which the application will be unavailable. " +
-                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support\n\n" +
-                    $"Newer builds with future expiration dates can be found here: {GITHUB_URL}\n\n" +
+                
+                    // Display opening msg - RE-ENABLED
+                    string msg = "The current " + PROJECT_NAME + " application is provided AS IS as a non-clinical, research only tool in evaluation only. The current " +
+                    "application will only be available until " + endDate.ToShortDateString() + " after which the application will be unavailable. " +
+                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support.\n\n" +
+                    "Newer builds with future expiration dates can be found here: " + GITHUB_URL + "\n\n" +
                     "See the FAQ for more information on how to remove this pop-up and expiration";
-
-                    string msg2 = $"Application will only be available until {endDate.Date} after which the application will be unavailable. " +
-                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support\n\n" +
-                    $"Newer builds with future expiration dates can be found here: {GITHUB_URL}\n\n" +
+                
+                    string msg2 = "Application will only be available until " + endDate.ToShortDateString() + " after which the application will be unavailable. " +
+                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support.\n\n" +
+                    "Newer builds with future expiration dates can be found here: " + GITHUB_URL + "\n\n" +
                     "See the FAQ for more information on how to remove this pop-up and expiration";
-
-                    // Check if validated in EulaConfig
-                    bool isValidated = eulaConfig.Settings?.Validated ?? false;
-
+                
+                    // Check if validated (using simple file check from AppData) - RE-ENABLED
+                    bool isValidatedUser = IsValidated; // Keep the class member for UI title for now
+                    string validatedFilePath = SimpleLicenseVerifier.GetValidatedFilePath(PROJECT_NAME);
+                    bool hasValidatedBefore = File.Exists(validatedFilePath);
+                
                     if (!bNoExpire && !skipAgree)
                     {
-                        if (!isValidated)
+                        if (!hasValidatedBefore)
                         {
                             // Show the first-time message
                             var res = MessageBox.Show(msg, "Agreement  ", MessageBoxButton.YesNo);
-
+                
                             if (res == MessageBoxResult.No)
                             {
-                                window.Close();
                                 return;
                             }
                             
-                            // Mark as validated for next time in the EulaConfig
-                            if (eulaConfig.Settings != null)
+                            // Mark as validated for next time in AppData
+                            try
                             {
-                                eulaConfig.Settings.Validated = true;
-                                eulaConfig.Save();
+                                File.WriteAllText(validatedFilePath, DateTime.Now.ToString());
                             }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine("Error saving validation status to AppData: " + ex.Message);
+                                // Continue execution even if save fails
+                            }
+                            isValidatedUser = true; // Update for current session if agreed
                         }
-                        else
+                        else 
                         {
-                            // Show the returning user message
-                            var res = MessageBox.Show(msg2, "Agreement  ", MessageBoxButton.YesNo);
-
+                            // Show the shorter message for subsequent uses
+                            var res = MessageBox.Show(msg2, "Agreement", MessageBoxButton.YesNo);
+                
                             if (res == MessageBoxResult.No)
                             {
-                                window.Close();
                                 return;
                             }
+                            isValidatedUser = true; // User has seen agreement before and clicked Yes again
                         }
                     }
+                    else
+                    {
+                        // If skipping agreement or no expiration, consider validated for UI purposes if `IsValidated` (class member) is true
+                        // or if they had previously validated.
+                        isValidatedUser = IsValidated || hasValidatedBefore;
+                    }
+                     // Update the IsValidated class member based on these checks for the UI title
+                    IsValidated = isValidatedUser; 
                 }
 
-                window.Activated += Window_Activated;
-
+                // Continue with main application code
                 if (context.Patient == null)
                 {
-                    MessageBox.Show("There is no patient opened. Please open patient and a proton plan.");
+                    MessageBox.Show("No patient currently loaded.");
+                    return;
+                }
+                
+                if (context.IonPlanSetup == null) 
+                {
+                    MessageBox.Show("No proton plan currently loaded.");
                     return;
                 }
 
-                if (context.IonPlanSetup == null)
+                var win = new SnoutPreview(context, window, environment, IsValidated);
+                window.Content = win;
+                window.Title = "MAAS - ProtonSnoutCollision" + (IsValidated ? "" : " NOT VALIDATED FOR CLINICAL USE");
+
+                window.Width = 700; 
+                window.Height = 850; 
+                // window.SizeToContent = SizeToContent.WidthAndHeight; // Keep commented or set to Manual if using fixed size
+                
+                // Use the Loaded event to ensure the window is ready before activating
+                RoutedEventHandler loadedEventHandler = null;
+                loadedEventHandler = (s, e_loaded) => 
                 {
-                    MessageBox.Show("There are no proton plans opened. Please open a proton plan.");
-                    return;
-                }
-
-                WNDContent wnd = new WNDContent();
-                wnd.context = context;
-                window.Content = wnd;
-                window.MinWidth = 630;
-                window.MinHeight = 800;
-                window.Width = 630;
-                window.Title = "MAAS-ProtonSnoutCollision";
-
-                if (!IsValidated)
-                {
-                    window.Title += " * * * NOT VALIDATED FOR CLINICAL USE * * *";
-                }
-
-                window.Height = 800;
-
-                //Initialize GUI
-                Label lbl = LogicalTreeHelper.FindLogicalNode(window, "patient") as Label;
-                lbl.Content = context.Patient.FirstName + " " + context.Patient.LastName + " (ID:" + context.Patient.Id + ")";
-
-                lbl = LogicalTreeHelper.FindLogicalNode(window, "plan") as Label;
-                lbl.Content = context.Patient.FirstName + " " + context.IonPlanSetup;
-
-                Double snout_distance = context.IonPlanSetup.IonBeams.ElementAt(0).SnoutPosition;
-                lbl = LogicalTreeHelper.FindLogicalNode(window, "snout_position_value") as Label;
-                lbl.Content = snout_distance.ToString("##.0");
-
-                Slider sl = LogicalTreeHelper.FindLogicalNode(window, "snout_position") as Slider;
-                sl.Value = snout_distance * 10;
-
-                ComboBox cb = LogicalTreeHelper.FindLogicalNode(window, "fields") as ComboBox;
-                foreach (IonBeam beam in context.IonPlanSetup.IonBeams)
-                {
-                    cb.Items.Add(beam.Id);
-                }
-                cb.SelectedIndex = 0;
-
-                wnd.Initiate3DView();
+                    window.WindowState = WindowState.Normal;
+                    window.Activate();
+                    // Remove the handler so it doesn't fire again if Loaded somehow re-triggers
+                    window.Loaded -= loadedEventHandler;
+                };
+                window.Loaded += loadedEventHandler;
             }
             catch (Exception ex)
             {
-                // Check if Debug is enabled
-                bool debugEnabled = false;
-                try 
-                {
-                    debugEnabled = ConfigurationManager.AppSettings["Debug"] == "true";
-                }
-                catch 
-                {
-                    // If config access fails, default to false
-                    debugEnabled = false;
-                }
-
-                if (debugEnabled)
-                {
-                    MessageBox.Show(ex.ToString());
-                }
-                else
-                {
-                    MessageBox.Show($"An error occurred: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-                window.Close();
+                MessageBox.Show("Error: " + ex.Message + (ex.InnerException != null ? "\nInner: " + ex.InnerException.Message : ""));
             }
         }
-
-        private void Window_Activated(object sender, EventArgs e)
-        {
-            //Closing empty window if patient or plan not opened;
-            Window window = sender as Window;
-            if (window.Content == null)
-            {
-                window.Close();
-            }
-        }
-
     }
 }
