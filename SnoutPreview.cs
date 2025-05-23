@@ -16,8 +16,25 @@ using System.Collections;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows.Navigation;
+using MAAS.Common.EulaVerification;
+using System.Configuration;
+using System.IO;
+using System.Globalization;
+using System.Windows.Media.Imaging;
 
 [assembly: AssemblyVersion("1.0.0.1")]
+[assembly: AssemblyExpirationDate("2026-12-31")]
+
+// Expiration date attribute
+public class AssemblyExpirationDate : Attribute
+{
+    public string ExpirationDate { get; }
+    
+    public AssemblyExpirationDate(string expirationDate)
+    {
+        ExpirationDate = expirationDate;
+    }
+}
 
 // USER NOTES:
 // The SnoutPosition property requires version 16 or greater of Eclipse
@@ -877,6 +894,10 @@ namespace VMS.TPS
 
     public class Script
     {
+        private const string PROJECT_NAME = "ProtonSnoutCollision";
+        private const string PROJECT_VERSION = "1.0.0";
+        private const string LICENSE_URL = "https://varian-medicalaffairsappliedsolutions.github.io/MAAS-ProtonSnoutCollision";
+        private const string GITHUB_URL = "https://github.com/Varian-MedicalAffairsAppliedSolutions/MAAS-ProtonSnoutCollision";
 
         //USER MODIFIABLE: After validating this change below to true to remove NOT VALIDATED text in UI
         bool IsValidated = false;
@@ -888,78 +909,207 @@ namespace VMS.TPS
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void Execute(ScriptContext context, System.Windows.Window window, ScriptEnvironment environment)
         {
-
-
-            //USER MODIFIABLE: COMMENT OUT THE FOLLOWING TO REMOVE LICENSE POPUP
-            var msg = "You are bound by the terms of the Varian Limited Use Software License Agreement (LULSA).\nShow license agreement?";
-            string title = "Varian LULSA";
-            var buttons = System.Windows.MessageBoxButton.YesNo;
-            var result = MessageBox.Show(msg, title, buttons);
-            if (result == System.Windows.MessageBoxResult.Yes)
+            try
             {
-                Process.Start("notepad.exe", "license.txt");
+                // Get the assembly path
+                var path = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                
+                // Check for NOEXPIRE file
+                var noexp_path = Path.Combine(path, "NOEXPIRE");
+                bool bNoExpire = File.Exists(noexp_path);
+                
+                // Check for NoAgree.txt file
+                bool skipAgree = File.Exists(Path.Combine(path, "NoAgree.txt"));
+
+                // Initialize EULA verification
+                var eulaVerifier = new EulaVerifier(PROJECT_NAME, PROJECT_VERSION, LICENSE_URL);
+                
+                // Get access to the EulaConfig
+                var eulaConfig = EulaConfig.Load(PROJECT_NAME);
+                if (eulaConfig.Settings == null)
+                {
+                    eulaConfig.Settings = new ApplicationSettings();
+                }
+
+                // Show EULA dialog if not accepted yet and not skipping agreement
+                if (!eulaVerifier.IsEulaAccepted() && !skipAgree)
+                {
+                    MessageBox.Show(
+                        $"This version of {PROJECT_NAME} (v{PROJECT_VERSION}) requires license acceptance before first use.\n\n" +
+                        "You will be prompted to provide an access code. Please follow the instructions to obtain your code.",
+                        "License Acceptance Required",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+
+                    // Load QR code image
+                    BitmapImage qrCode = null;
+                    try
+                    {
+                        string qrCodePath = Path.Combine(path, "Resources", "qrcode.bmp");
+                        if (File.Exists(qrCodePath))
+                        {
+                            qrCode = new BitmapImage(new Uri(qrCodePath, UriKind.Absolute));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error loading QR code: {ex.Message}");
+                    }
+
+                    // Show dialog and check result
+                    if (!eulaVerifier.ShowEulaDialog(qrCode))
+                    {
+                        MessageBox.Show(
+                            "License acceptance is required to use this application.\n\n" +
+                            "The application will now close.",
+                            "License Not Accepted",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                        window.Close();
+                        return;
+                    }
+                }
+
+                // Check expiration
+                var asmCa = typeof(Script).Assembly.CustomAttributes
+                    .FirstOrDefault(ca => ca.AttributeType == typeof(AssemblyExpirationDate));
+                
+                if (asmCa != null &&
+                    DateTime.TryParse(asmCa.ConstructorArguments.FirstOrDefault().Value as string,
+                        new CultureInfo("en-US"), DateTimeStyles.None, out DateTime endDate))
+                {
+                    if (DateTime.Now > endDate && !bNoExpire)
+                    {
+                        MessageBox.Show($"Application has expired. Newer builds with future expiration dates can be found here: {GITHUB_URL}");
+                        window.Close();
+                        return;
+                    }
+
+                    // Display opening msg
+                    string msg = $"The current DoseDynamicArcs application is provided AS IS as a non-clinical, research only tool in evaluation only. The current " +
+                    $"application will only be available until {endDate.Date} after which the application will be unavailable. " +
+                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support\n\n" +
+                    $"Newer builds with future expiration dates can be found here: {GITHUB_URL}\n\n" +
+                    "See the FAQ for more information on how to remove this pop-up and expiration";
+
+                    string msg2 = $"Application will only be available until {endDate.Date} after which the application will be unavailable. " +
+                    "By Clicking 'Yes' you agree that this application will be evaluated and not utilized in providing planning decision support\n\n" +
+                    $"Newer builds with future expiration dates can be found here: {GITHUB_URL}\n\n" +
+                    "See the FAQ for more information on how to remove this pop-up and expiration";
+
+                    // Check if validated in EulaConfig
+                    bool isValidated = eulaConfig.Settings?.Validated ?? false;
+
+                    if (!bNoExpire && !skipAgree)
+                    {
+                        if (!isValidated)
+                        {
+                            // Show the first-time message
+                            var res = MessageBox.Show(msg, "Agreement  ", MessageBoxButton.YesNo);
+
+                            if (res == MessageBoxResult.No)
+                            {
+                                window.Close();
+                                return;
+                            }
+                            
+                            // Mark as validated for next time in the EulaConfig
+                            if (eulaConfig.Settings != null)
+                            {
+                                eulaConfig.Settings.Validated = true;
+                                eulaConfig.Save();
+                            }
+                        }
+                        else
+                        {
+                            // Show the returning user message
+                            var res = MessageBox.Show(msg2, "Agreement  ", MessageBoxButton.YesNo);
+
+                            if (res == MessageBoxResult.No)
+                            {
+                                window.Close();
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                window.Activated += Window_Activated;
+
+                if (context.Patient == null)
+                {
+                    MessageBox.Show("There is no patient opened. Please open patient and a proton plan.");
+                    return;
+                }
+
+                if (context.IonPlanSetup == null)
+                {
+                    MessageBox.Show("There are no proton plans opened. Please open a proton plan.");
+                    return;
+                }
+
+                WNDContent wnd = new WNDContent();
+                wnd.context = context;
+                window.Content = wnd;
+                window.MinWidth = 630;
+                window.MinHeight = 800;
+                window.Width = 630;
+                window.Title = "MAAS-ProtonSnoutCollision";
+
+                if (!IsValidated)
+                {
+                    window.Title += " * * * NOT VALIDATED FOR CLINICAL USE * * *";
+                }
+
+                window.Height = 800;
+
+                //Initialize GUI
+                Label lbl = LogicalTreeHelper.FindLogicalNode(window, "patient") as Label;
+                lbl.Content = context.Patient.FirstName + " " + context.Patient.LastName + " (ID:" + context.Patient.Id + ")";
+
+                lbl = LogicalTreeHelper.FindLogicalNode(window, "plan") as Label;
+                lbl.Content = context.Patient.FirstName + " " + context.IonPlanSetup;
+
+                Double snout_distance = context.IonPlanSetup.IonBeams.ElementAt(0).SnoutPosition;
+                lbl = LogicalTreeHelper.FindLogicalNode(window, "snout_position_value") as Label;
+                lbl.Content = snout_distance.ToString("##.0");
+
+                Slider sl = LogicalTreeHelper.FindLogicalNode(window, "snout_position") as Slider;
+                sl.Value = snout_distance * 10;
+
+                ComboBox cb = LogicalTreeHelper.FindLogicalNode(window, "fields") as ComboBox;
+                foreach (IonBeam beam in context.IonPlanSetup.IonBeams)
+                {
+                    cb.Items.Add(beam.Id);
+                }
+                cb.SelectedIndex = 0;
+
+                wnd.Initiate3DView();
             }
-            else
+            catch (Exception ex)
             {
-                // Nothing
+                // Check if Debug is enabled
+                bool debugEnabled = false;
+                try 
+                {
+                    debugEnabled = ConfigurationManager.AppSettings["Debug"] == "true";
+                }
+                catch 
+                {
+                    // If config access fails, default to false
+                    debugEnabled = false;
+                }
+
+                if (debugEnabled)
+                {
+                    MessageBox.Show(ex.ToString());
+                }
+                else
+                {
+                    MessageBox.Show($"An error occurred: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                window.Close();
             }
-            // -----------------------------------------------------
-
-
-
-            window.Activated += Window_Activated;
-
-            if (context.Patient == null)
-            {
-                MessageBox.Show("There is no patient opened. Please open patient and a proton plan.");
-                return;
-            }
-
-            if (context.IonPlanSetup == null)
-            {
-                MessageBox.Show("There are no proton plans opened. Please open a proton plan.");
-                return;
-            }
-
-            WNDContent wnd = new WNDContent();
-            wnd.context = context;
-            window.Content = wnd;
-            window.MinWidth = 630;
-            window.MinHeight = 800;
-            window.Width = 630;
-            window.Title = "MAAS-ProtonSnoutCollision";
-
-            if (!IsValidated)
-            {
-                window.Title += " * * * NOT VALIDATED FOR CLINICAL USE * * *";
-            }
-
-
-
-            window.Height = 800;
-
-            //Initialize GUI
-            Label lbl = LogicalTreeHelper.FindLogicalNode(window, "patient") as Label;
-            lbl.Content = context.Patient.FirstName + " " + context.Patient.LastName + " (ID:" + context.Patient.Id + ")";
-
-            lbl = LogicalTreeHelper.FindLogicalNode(window, "plan") as Label;
-            lbl.Content = context.Patient.FirstName + " " + context.IonPlanSetup;
-
-            Double snout_distance = context.IonPlanSetup.IonBeams.ElementAt(0).SnoutPosition;
-            lbl = LogicalTreeHelper.FindLogicalNode(window, "snout_position_value") as Label;
-            lbl.Content = snout_distance.ToString("##.0");
-
-            Slider sl = LogicalTreeHelper.FindLogicalNode(window, "snout_position") as Slider;
-            sl.Value = snout_distance * 10;
-
-            ComboBox cb = LogicalTreeHelper.FindLogicalNode(window, "fields") as ComboBox;
-            foreach (IonBeam beam in context.IonPlanSetup.IonBeams)
-            {
-                cb.Items.Add(beam.Id);
-            }
-            cb.SelectedIndex = 0;
-
-            wnd.Initiate3DView();
         }
 
         private void Window_Activated(object sender, EventArgs e)
